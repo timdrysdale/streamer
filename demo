@@ -1,0 +1,2 @@
+#!/bin/bash
+./streamer -t ws://foo.com:1234 -r wss://bar.com:443 -v
