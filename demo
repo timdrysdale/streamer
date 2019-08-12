@@ -1,2 +1,4 @@
 #!/bin/bash
-./streamer -t ws://foo.com:1234 -r wss://bar.com:443 -v
+./streamer -t ws://localhost:8082/ -r ws://jsmpeg.practable.io:80/ws/camera/ -v
+#./streamer -t ws://localhost:8082/ -r ws://localhost:8011 -v
+

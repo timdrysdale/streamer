@@ -696,7 +696,7 @@ So ... now need a relay that logs into the local websocket relay, and transmits 
 audio ...
 ffmpeg -f alsa -ar 44100 -c 2 -i hw:0 -f mpegts -codec:a mp2 -b:a 128k -muxdelay 0.001 http://localhost:8081/supersecret
 
-./enco
+./encode_video.sh
 
 ## identifying the webcam
 
@@ -724,6 +724,26 @@ $ ffmpeg -f v4l2 -framerate 25 -video_size 640x480 -i /dev/v4l/by-id/usb-046d_HD
 ```
 
 
+### chat room
+
+this is accessible from behind the firewall
+```
+$ wscat --connect ws://jsmpeg.practable.io:80/ws/time/
+connected (press CTRL+C to quit)
+< 2019-08-12 00:22:49.599484002 +0000 UTC m=+50.002033542
+< 2019-08-12 00:22:59.599415086 +0000 UTC m=+60.001964625
+< 2019-08-12 00:23:09.599424551 +0000 UTC m=+70.001974087
+< 2019-08-12 00:23:19.599433096 +0000 UTC m=+80.001982650
+< 2019-08-12 00:23:29.599428148 +0000 UTC m=+90.001977696
+```
+
+can connect to the AWS relay and send and receive messages
+wscat --connect  ws://jsmpeg.practable.io:80/ws/camera/
+
+can connect to the local relay and see camera data
+wscat --connect  ws://localhost:8082/
+
+
 
 #Useful stuff
 
@@ -731,4 +751,13 @@ grep -rnw './' -e 'Decode'
 
 colordiff -y <(xxd sample2.mp4) <(xxd copy2.mp4)
 colordiff -y <(xxd -l1000 sample2.mp4) <(xxd -l1000 copy2.mp4)
+
+getting node to run as sudo
+n=$(which node); \
+n=${n%/bin/node}; \
+chmod -R 755 $n/bin/*; \
+sudo cp -r $n/{bin,lib,share} /usr/local
+
+except can't run that due to 'dangling symlinks'
+
 
