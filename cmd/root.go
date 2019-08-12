@@ -115,7 +115,7 @@ func HandleTransmitter(closed <-chan struct{}, msg chan<- []byte, wg *sync.WaitG
 	if servers {
 
 		fn := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			c, err := websocket.Accept(w, r, websocket.AcceptOptions{})
+			c, err := websocket.Accept(w, r, websocket.AcceptOptions{InsecureSkipVerify: true})
 			if err != nil {
 				log.Println(err)
 				return
@@ -231,7 +231,7 @@ func HandleReceiver(closed <-chan struct{}, msg <-chan []byte, wg *sync.WaitGrou
 	if servers {
 
 		fn := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			c, err := websocket.Accept(w, r, websocket.AcceptOptions{})
+			c, err := websocket.Accept(w, r, websocket.AcceptOptions{InsecureSkipVerify: true})
 			if err != nil {
 				log.Println(err)
 				return
