@@ -128,7 +128,9 @@ func HandleTransmitter(closed <-chan struct{}, msg chan<- []byte, wg *sync.WaitG
 			for {
 				select {
 				default:
-					fmt.Println("Awaiting message")
+					if verbose {
+						fmt.Println("Awaiting message")
+					}
 					typ, r, err := c.Reader(ctx)
 
 					if err != nil {
@@ -143,7 +145,9 @@ func HandleTransmitter(closed <-chan struct{}, msg chan<- []byte, wg *sync.WaitG
 
 					n, err = r.Read(buf)
 
-					fmt.Println("Got: ", n)
+					if verbose {
+						fmt.Println("Got: ", n)
+					}
 
 					if err != nil {
 						if err != io.EOF {
@@ -151,9 +155,13 @@ func HandleTransmitter(closed <-chan struct{}, msg chan<- []byte, wg *sync.WaitG
 						}
 
 					}
-					fmt.Println("Putting buf into channel")
+					if verbose {
+						fmt.Println("Putting buf into channel")
+					}
 					msg <- buf[:n]
-					fmt.Println("Processed message")
+					if verbose {
+						fmt.Println("Processed message")
+					}
 				case <-closed:
 					fmt.Println("Been told to finish up")
 					c.Close(websocket.StatusNormalClosure, "")
@@ -184,7 +192,9 @@ func HandleTransmitter(closed <-chan struct{}, msg chan<- []byte, wg *sync.WaitG
 		for {
 			select {
 			default:
-				fmt.Println("trying to read from transmitter")
+				if verbose {
+					fmt.Println("trying to read from transmitter")
+				}
 				typ, r, err := c.Reader(ctx)
 
 				if err != nil {
@@ -199,7 +209,9 @@ func HandleTransmitter(closed <-chan struct{}, msg chan<- []byte, wg *sync.WaitG
 				}
 
 				n, err = r.Read(buf)
-				fmt.Println("Got: ", n)
+				if verbose {
+					fmt.Println("Got: ", n)
+				}
 				if err != nil {
 					if err != io.EOF {
 						fmt.Println("Read:", err)
@@ -258,7 +270,9 @@ func HandleReceiver(closed <-chan struct{}, msg <-chan []byte, wg *sync.WaitGrou
 
 					n, err = w.Write(buf)
 
-					fmt.Println("wrote buf of length", n)
+					if verbose {
+						fmt.Println("wrote buf of length", n)
+					}
 
 					if n != len(buf) {
 						fmt.Println("Mismatch write lengths, overflow?")
@@ -272,7 +286,9 @@ func HandleReceiver(closed <-chan struct{}, msg <-chan []byte, wg *sync.WaitGrou
 					}
 
 					err = w.Close() // do every write to flush frame
-					fmt.Println("closed writer")
+					if verbose {
+						fmt.Println("closed writer")
+					}
 					if err != nil {
 						fmt.Println("Closing Write failed:", err)
 					}
@@ -322,7 +338,9 @@ func HandleReceiver(closed <-chan struct{}, msg <-chan []byte, wg *sync.WaitGrou
 
 				n, err = w.Write(buf)
 
-				fmt.Println("wrote buf of length", n)
+				if verbose {
+					fmt.Println("wrote buf of length", n)
+				}
 
 				if n != len(buf) {
 					fmt.Println("Mismatch write lengths, overflow?\n")
@@ -336,7 +354,9 @@ func HandleReceiver(closed <-chan struct{}, msg <-chan []byte, wg *sync.WaitGrou
 				}
 
 				err = w.Close() // do every write to flush frame
-				fmt.Println("closed writer")
+				if verbose {
+					fmt.Println("closed writer")
+				}
 				if err != nil {
 					fmt.Println("Closing Write failed:", err)
 				}
