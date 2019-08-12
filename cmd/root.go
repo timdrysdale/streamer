@@ -5,13 +5,14 @@ import (
 	//"errors"
 	"fmt"
 	"io"
-	//"log"
+	"log"
 	//"math"
 	//"net"
-	//"net/http"
+	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	//"time"
 
@@ -19,19 +20,22 @@ import (
 	//"golang.org/x/time/rate"
 	//"golang.org/x/xerrors"
 	"nhooyr.io/websocket"
-	//"nhooyr.io/websocket/wsjson"
 )
 
 var transmitter string
 var receiver string
 var verbose bool
+var servers bool
+var bufsize int64
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&transmitter, "transmitter", "t", "", "<ip>:<port> of the websocket server that will transmit messages")
 	rootCmd.MarkFlagRequired("transmitter")
 	rootCmd.PersistentFlags().StringVarP(&receiver, "receiver", "r", "", "<ip>:<port> of the websocket server that will receive messages")
 	rootCmd.MarkFlagRequired("receiver")
-	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "print connection and message logs")
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "print connection and message logs [DEFAULT is quiet]")
+	rootCmd.PersistentFlags().BoolVarP(&servers, "servers", "s", false, "make endpoints servers [DEFAULT is clients]")
+	rootCmd.PersistentFlags().Int64VarP(&bufsize, "bufsize", "b", 65535, "buffer size (max message size) [DEFAULT is 65535 bytes]")
 
 }
 
@@ -44,6 +48,7 @@ var rootCmd = &cobra.Command{
 
 		// parse urls
 		// see https://www.alexedwards.net/blog/validation-snippets-for-go#url-validation)
+		// TO DO - only check what we will actually use (depends on --servers)
 		t, err := url.Parse(transmitter)
 		if err != nil {
 			panic(err)
@@ -74,20 +79,21 @@ var rootCmd = &cobra.Command{
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, os.Interrupt)
 		msg := make(chan []byte)
+		closed := make(chan struct{})
 
 		go func() {
 			for _ = range c {
 
-				close(msg)
+				close(closed)
 				wg.Wait()
 				os.Exit(1)
 
 			}
 		}()
 
-		wg.Add(2)
-		go HandleTransmitter(msg, &wg, t)
-		go HandleReceiver(msg, &wg, r)
+		wg.Add(1)
+		go HandleTransmitter(closed, msg, &wg, t)
+		go HandleReceiver(closed, msg, &wg, r)
 		wg.Wait()
 	},
 }
@@ -100,154 +106,280 @@ func Execute() {
 	}
 }
 
-func HandleTransmitter(msg chan<- []byte, wg *sync.WaitGroup, t *url.URL) {
-	//TODO signal with a different channel so it does not panic on writing to closed channel after SIGINT
+func HandleTransmitter(closed <-chan struct{}, msg chan<- []byte, wg *sync.WaitGroup, t *url.URL) {
 	defer wg.Done()
 
-	var buf = make([]byte, 65535+1) //1000kbps rate at 30fps is just over 4200byte/s
+	ctx, cancel := context.WithCancel(context.Background())
+
+	defer cancel()
+
+	var buf = make([]byte, bufsize)
 	var n int
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	fmt.Println("connecting to", t.String())
-	c, _, err := websocket.Dial(ctx, t.String(), websocket.DialOptions{})
-	//c.SetReadLimit(65535)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
+	if servers {
 
-	defer c.Close(websocket.StatusInternalError, fmt.Sprintf("Internal error with websocket client %s", t.String()))
-	fmt.Println("in handle transmitter")
-	for {
-		fmt.Println("trying to read from transmitter")
-		typ, r, err := c.Reader(ctx)
+		fn := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			c, err := websocket.Accept(w, r, websocket.AcceptOptions{})
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			defer c.Close(websocket.StatusInternalError, "the sky is falling")
+
+			ctx, cancel := context.WithCancel(r.Context())
+			defer cancel()
+
+			for {
+				select {
+				default:
+					fmt.Println("Awaiting message")
+					typ, r, err := c.Reader(ctx)
+
+					if err != nil {
+
+						fmt.Println("tx: io.Reader", err)
+						return
+					}
+
+					if typ != websocket.MessageBinary {
+						fmt.Println("Not binary")
+					}
+
+					n, err = r.Read(buf)
+
+					fmt.Println("Got: ", n)
+
+					if err != nil {
+						if err != io.EOF {
+							fmt.Println("Read:", err)
+						}
+
+					}
+					fmt.Println("Putting buf into channel")
+					msg <- buf[:n]
+					fmt.Println("Processed message")
+				case <-closed:
+					fmt.Println("Been told to finish up")
+					c.Close(websocket.StatusNormalClosure, "")
+					return
+				}
+			}
+		})
+		addr := strings.Join([]string{t.Hostname(), ":", t.Port()}, "")
+		log.Printf("Starting listener on %s\n", addr)
+		err := http.ListenAndServe(addr, fn)
+		log.Fatal(err)
+	} else {
+		if verbose {
+			fmt.Println("connecting to", t.String())
+		}
+
+		c, _, err := websocket.Dial(ctx, t.String(), websocket.DialOptions{})
 
 		if err != nil {
-
-			fmt.Println("tx: io.Reader", err)
+			fmt.Println(err)
 			return
 		}
 
-		if typ != websocket.MessageBinary {
-			fmt.Println("Not binary")
-			//return
-		}
+		defer c.Close(websocket.StatusInternalError, fmt.Sprintf("Internal error with incoming websocket %s", t.String()))
 
-		n, err = r.Read(buf)
-		fmt.Println("Got: ", n)
-		if err != nil {
-			if err != io.EOF {
-				fmt.Println("Read:", err)
+		for {
+			select {
+			default:
+				fmt.Println("trying to read from transmitter")
+				typ, r, err := c.Reader(ctx)
+
+				if err != nil {
+
+					fmt.Println("tx: io.Reader", err)
+					return
+				}
+
+				if typ != websocket.MessageBinary {
+					fmt.Println("Not binary")
+					//return
+				}
+
+				n, err = r.Read(buf)
+				fmt.Println("Got: ", n)
+				if err != nil {
+					if err != io.EOF {
+						fmt.Println("Read:", err)
+					}
+
+				}
+
+				msg <- buf[:n]
+
+			case <-closed:
+				c.Close(websocket.StatusNormalClosure, "")
+				return
 			}
-
 		}
-
-		//fmt.Println(buf[:n])
-		msg <- buf[:n]
 
 	}
-
-	c.Close(websocket.StatusNormalClosure, "")
-	return
-
 }
 
-func HandleReceiver(msg <-chan []byte, wg *sync.WaitGroup, t *url.URL) {
+//func ReadPump(c *websocket.Conn, msg chan<- []byte, ctx context.Context) { //type of ctx
+//
+//	fmt.Println("bufsize", bufsize)
+//
+//	var buf = make([]byte, bufsize) //1000kbps rate at 30fps is just over 4200byte/s
+//
+//	var n int
+//
+//	c.SetReadLimit(bufsize)
+//
+//	if verbose {
+//		fmt.Println("in ReadPump")
+//	}
+//
+//	for {
+//		typ, r, err := c.Reader(ctx)
+//
+//		if err != nil {
+//
+//			fmt.Println("tx: io.Reader", err)
+//			return
+//		}
+//
+//		if typ != websocket.MessageBinary {
+//			fmt.Println("Not binary")
+//		}
+//
+//		n, err = r.Read(buf)
+//
+//		if verbose {
+//			fmt.Println("Got: ", n)
+//		}
+//
+//		if err != nil {
+//			if err != io.EOF {
+//				fmt.Printf("\rIn:%[7]d       ", err)
+//			}
+//		}
+//
+//		msg <- buf[:n]
+//	}
+//
+//	c.Close(websocket.StatusNormalClosure, "")
+//
+//	return
+//
+//}
+//
+//func IncomingServer(w http.ResponseWriter, r *http.Request, msg chan<- []byte, ctx context.Context) error {
+//	fmt.Println("In IncomingServer")
+//	c, err := websocket.Accept(w, r, websocket.AcceptOptions{})
+//
+//	if err != nil {
+//		return err
+//	}
+//
+//	ReadPump(c, msg, ctx)
+//
+//	return nil
+//}
+//
+//func IncomingClient(msg chan<- []byte, wg *sync.WaitGroup, t *url.URL) {
+//
+//}
+
+func HandleReceiver(closed <-chan struct{}, msg <-chan []byte, wg *sync.WaitGroup, t *url.URL) {
 	for pkt := range msg {
 		fmt.Println(len(pkt))
 	}
 }
 
-func HandleReceiverOld(msg <-chan []byte, wg *sync.WaitGroup, t *url.URL) {
-	// NOTE that nhooyr websockets must read messages sent to them else
-	// control frames are not processed ... so bidirectional is needed
-	defer wg.Done()
-
-	//var buf = make([]byte, 65535+1) //1000kbps rate at 30fps is just over 4200byte/s
-	var n int
-
-	//ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	c, _, err := websocket.Dial(ctx, t.String(), websocket.DialOptions{})
-	//c.SetReadLimit(65535)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	defer c.Close(websocket.StatusInternalError, fmt.Sprintf("Internal error with websocket client %s", t.String()))
-	fmt.Println("In Handle Receiver")
-
-	//assume we don't get any messages so we must keep extending the readDeadline
-	//ticker := time.NewTicker(30 * time.Second)
-	//go func() {
-	//	for t := range ticker.C {
-	//		//ctx.SetReadDeadline(time.Minute)
-	//		c.setReadTimeout <- context.Background()
-	//	}
-	//}()
-	// read but ignore any messages we do receive
-	//go func() {
-	//	typ, r, err := c.Reader(ctx)
-	//
-	//	if err != nil {
-	//
-	//		fmt.Println("io.Reader", err)
-	//		return
-	//	}
-	//
-	//	if typ != websocket.MessageBinary {
-	//		fmt.Println("Not binary")
-	//		//return
-	//	}
-	//
-	//	n, err = r.Read(buf)
-	//	if err != nil {
-	//		if err != io.EOF {
-	//			fmt.Println("Read:", err)
-	//		}
-	//
-	//	} else {
-	//		fmt.Println("Got: ", n)
-	//	}
-	//
-	//}()
-
-	for pkt := range msg {
-		fmt.Printf("%T %d\n", pkt, len(pkt))
-		fmt.Println("attempting to read from channel")
-		//func (c *Conn) Writer(ctx context.Context, typ MessageType) (io.WriteCloser, error)
-		w, err := c.Writer(ctx, websocket.MessageBinary)
-		fmt.Println("got writer")
-		if err != nil {
-
-			fmt.Println("io.Writer", err)
-			return
-		}
-		fmt.Println("pkt size is", len(pkt))
-		//nn := int64(math.Min(float64(len(pkt)), float64(65535)))
-		n, err = w.Write(pkt[:511])
-
-		fmt.Println("wrote pkt length", n)
-
-		if err != nil {
-			if err != io.EOF {
-				fmt.Println("Write:", err)
-			}
-		}
-
-		err = w.Close()
-		fmt.Println("closed writer")
-		if err != nil {
-			fmt.Println("Closing Write failed:", err)
-		}
-
-	}
-
-	c.Close(websocket.StatusNormalClosure, "")
-	return
-
-}
+//func HandleReceiverOld(msg <-chan []byte, wg *sync.WaitGroup, server bool, bufsize int64, t *url.URL) {
+//	// NOTE that nhooyr websockets must read messages sent to them else
+//	// control frames are not processed ... so bidirectional is needed
+//	defer wg.Done()
+//
+//	//var buf = make([]byte, 65535+1) //1000kbps rate at 30fps is just over 4200byte/s
+//	var n int
+//
+//	//ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
+//	ctx, cancel := context.WithCancel(context.Background())
+//	defer cancel()
+//
+//	c, _, err := websocket.Dial(ctx, t.String(), websocket.DialOptions{})
+//	c.SetReadLimit(bufsize)
+//	if err != nil {
+//		fmt.Println(err)
+//		return
+//	}
+//
+//	defer c.Close(websocket.StatusInternalError, fmt.Sprintf("Internal error with websocket client %s", t.String()))
+//	fmt.Println("In Handle Receiver")
+//
+//	//assume we don't get any messages so we must keep extending the readDeadline
+//	//ticker := time.NewTicker(30 * time.Second)
+//	//go func() {
+//	//	for t := range ticker.C {
+//	//		//ctx.SetReadDeadline(time.Minute)
+//	//		c.setReadTimeout <- context.Background()
+//	//	}
+//	//}()
+//	// read but ignore any messages we do receive
+//	//go func() {
+//	//	typ, r, err := c.Reader(ctx)
+//	//
+//	//	if err != nil {
+//	//
+//	//		fmt.Println("io.Reader", err)
+//	//		return
+//	//	}
+//	//
+//	//	if typ != websocket.MessageBinary {
+//	//		fmt.Println("Not binary")
+//	//		//return
+//	//	}
+//	//
+//	//	n, err = r.Read(buf)
+//	//	if err != nil {
+//	//		if err != io.EOF {
+//	//			fmt.Println("Read:", err)
+//	//		}
+//	//
+//	//	} else {
+//	//		fmt.Println("Got: ", n)
+//	//	}
+//	//
+//	//}()
+//
+//	for pkt := range msg {
+//		fmt.Printf("%T %d\n", pkt, len(pkt))
+//		fmt.Println("attempting to read from channel")
+//		//func (c *Conn) Writer(ctx context.Context, typ MessageType) (io.WriteCloser, error)
+//		w, err := c.Writer(ctx, websocket.MessageBinary)
+//		fmt.Println("got writer")
+//		if err != nil {
+//
+//			fmt.Println("io.Writer", err)
+//			return
+//		}
+//		fmt.Println("pkt size is", len(pkt))
+//		//nn := int64(math.Min(float64(len(pkt)), float64(65535)))
+//		n, err = w.Write(pkt[:511])
+//
+//		fmt.Println("wrote pkt length", n)
+//
+//		if err != nil {
+//			if err != io.EOF {
+//				fmt.Println("Write:", err)
+//			}
+//		}
+//
+//		err = w.Close()
+//		fmt.Println("closed writer")
+//		if err != nil {
+//			fmt.Println("Closing Write failed:", err)
+//		}
+//
+//	}
+//
+//	c.Close(websocket.StatusNormalClosure, "")
+//	return
+//
+//}
