@@ -109,10 +109,6 @@ func Execute() {
 func HandleTransmitter(closed <-chan struct{}, msg chan<- []byte, wg *sync.WaitGroup, t *url.URL) {
 	defer wg.Done()
 
-	ctx, cancel := context.WithCancel(context.Background())
-
-	defer cancel()
-
 	var buf = make([]byte, bufsize)
 	var n int
 
@@ -174,6 +170,8 @@ func HandleTransmitter(closed <-chan struct{}, msg chan<- []byte, wg *sync.WaitG
 			fmt.Println("connecting to", t.String())
 		}
 
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		c, _, err := websocket.Dial(ctx, t.String(), websocket.DialOptions{})
 
 		if err != nil {
@@ -220,74 +218,135 @@ func HandleTransmitter(closed <-chan struct{}, msg chan<- []byte, wg *sync.WaitG
 	}
 }
 
-//func ReadPump(c *websocket.Conn, msg chan<- []byte, ctx context.Context) { //type of ctx
-//
-//	fmt.Println("bufsize", bufsize)
-//
-//	var buf = make([]byte, bufsize) //1000kbps rate at 30fps is just over 4200byte/s
-//
-//	var n int
-//
-//	c.SetReadLimit(bufsize)
-//
-//	if verbose {
-//		fmt.Println("in ReadPump")
-//	}
-//
-//	for {
-//		typ, r, err := c.Reader(ctx)
-//
-//		if err != nil {
-//
-//			fmt.Println("tx: io.Reader", err)
-//			return
-//		}
-//
-//		if typ != websocket.MessageBinary {
-//			fmt.Println("Not binary")
-//		}
-//
-//		n, err = r.Read(buf)
-//
-//		if verbose {
-//			fmt.Println("Got: ", n)
-//		}
-//
-//		if err != nil {
-//			if err != io.EOF {
-//				fmt.Printf("\rIn:%[7]d       ", err)
-//			}
-//		}
-//
-//		msg <- buf[:n]
-//	}
-//
-//	c.Close(websocket.StatusNormalClosure, "")
-//
-//	return
-//
-//}
-//
-//func IncomingServer(w http.ResponseWriter, r *http.Request, msg chan<- []byte, ctx context.Context) error {
-//	fmt.Println("In IncomingServer")
-//	c, err := websocket.Accept(w, r, websocket.AcceptOptions{})
-//
-//	if err != nil {
-//		return err
-//	}
-//
-//	ReadPump(c, msg, ctx)
-//
-//	return nil
-//}
-//
-//func IncomingClient(msg chan<- []byte, wg *sync.WaitGroup, t *url.URL) {
-//
-//}
-
 func HandleReceiver(closed <-chan struct{}, msg <-chan []byte, wg *sync.WaitGroup, t *url.URL) {
-	for pkt := range msg {
-		fmt.Println(len(pkt))
+	//	for pkt := range msg {
+	//		fmt.Println(len(pkt))
+	//	}
+	//}
+
+	defer wg.Done()
+
+	var n int
+
+	if servers {
+
+		fn := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			c, err := websocket.Accept(w, r, websocket.AcceptOptions{})
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			defer c.Close(websocket.StatusInternalError, "the sky is falling")
+
+			ctx, cancel := context.WithCancel(r.Context())
+			ctx = c.CloseRead(ctx) //since we won't read
+			defer cancel()
+
+			for {
+				select {
+				case buf := <-msg:
+
+					w, err := c.Writer(ctx, websocket.MessageBinary)
+
+					if err != nil {
+						fmt.Println("io.Writer", err)
+						return
+					}
+					if verbose {
+						fmt.Println("buf size is", len(buf))
+					}
+
+					n, err = w.Write(buf)
+
+					fmt.Println("wrote buf of length", n)
+
+					if n != len(buf) {
+						fmt.Println("Mismatch write lengths, overflow?")
+						return
+					}
+
+					if err != nil {
+						if err != io.EOF {
+							fmt.Println("Write:", err)
+						}
+					}
+
+					err = w.Close() // do every write to flush frame
+					fmt.Println("closed writer")
+					if err != nil {
+						fmt.Println("Closing Write failed:", err)
+					}
+
+				case <-closed:
+					fmt.Println("Been told to finish up")
+					c.Close(websocket.StatusNormalClosure, "")
+					return
+				}
+			}
+		})
+		addr := strings.Join([]string{t.Hostname(), ":", t.Port()}, "")
+		log.Printf("Starting listener on %s\n", addr)
+		err := http.ListenAndServe(addr, fn)
+		log.Fatal(err)
+	} else {
+		if verbose {
+			fmt.Println("connecting to", t.String())
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		c, _, err := websocket.Dial(ctx, t.String(), websocket.DialOptions{})
+
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		defer c.Close(websocket.StatusInternalError, fmt.Sprintf("Internal error with incoming websocket %s", t.String()))
+
+		ctx = c.CloseRead(ctx) //since we won't read
+
+		for {
+			select {
+			case buf := <-msg:
+
+				w, err := c.Writer(ctx, websocket.MessageBinary)
+
+				if err != nil {
+					fmt.Println("io.Writer", err)
+					return
+				}
+				if verbose {
+					fmt.Println("buf size is", len(buf))
+				}
+
+				n, err = w.Write(buf)
+
+				fmt.Println("wrote buf of length", n)
+
+				if n != len(buf) {
+					fmt.Println("Mismatch write lengths, overflow?\n")
+					return
+				}
+
+				if err != nil {
+					if err != io.EOF {
+						fmt.Println("Write:", err)
+					}
+				}
+
+				err = w.Close() // do every write to flush frame
+				fmt.Println("closed writer")
+				if err != nil {
+					fmt.Println("Closing Write failed:", err)
+				}
+
+			case <-closed:
+				c.Close(websocket.StatusNormalClosure, "")
+				return
+			}
+		}
+
 	}
 }
 
