@@ -344,7 +344,7 @@ func HandleReceiver(closed <-chan struct{}, msg <-chan []byte, wg *sync.WaitGrou
 
 				if n != len(buf) {
 					fmt.Println("Mismatch write lengths, overflow?\n")
-					return
+
 				}
 
 				if err != nil {
