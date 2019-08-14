@@ -676,6 +676,26 @@ install with make, put executables in ~/bin, put bin on path (no 'install' targe
 https://github.com/hamishcoleman/h264mux
 some perl for streaming h264 of raspberry pi - or workups toward that solution.
 
+for working with ffmpeg to produce mp4 frags
+kevinGodell/mp4frag
+
+git clone <repo>
+cd <repo>
+npm install
+node ./tests/test.js
+
+no libx264 in my installation...
+ffmpeg -f v4l2 -framerate 25 -video_size 800x600 -i /dev/video0 -c:v libx264 -f mp4 -movflags +dash pipe:1
+
+but docker image does
+sudo docker run --device=/dev/video0 jrottenberg/ffmpeg -f v4l2 -framerate 25 -video_size 800x600 -i /dev/video0 -c:v libx264 -f mp4 -movflags +dash pipe:1
+
+
+v4l2-ctl --device /dev/video0 --set-fmt-video=width=800,height=600,pixelformat=H264
+
+
+
+
 
 ### Streaming like 1999 ...
 
@@ -723,6 +743,19 @@ so this then works:
 $ ffmpeg -f v4l2 -framerate 25 -video_size 640x480 -i /dev/v4l/by-id/usb-046d_HD_Pro_Webcam_C920_42B15FEF-video-index0  -f mpegts -codec:v mpeg1video -s 640x480 -b:v 1000k -bf 0 http://localhost:8081/supersecret
 ```
 
+## Drone stack webrtc
+https://webrtchacks.com/what-i-learned-about-h-264-for-webrtc-video-tim-panton/
+
+## MPEG TS buffering and delays
+https://tools.ietf.org/html/draft-begen-avt-rtp-mpeg2ts-preamble-06
+
+## fMP4
+https://tools.ietf.org/html/rfc8216#page-7
+https://www.iso.org/standard/68960.html
+
+mux issues
+https://github.com/videojs/mux.js/issues/144
+
 
 ### chat room
 
@@ -754,7 +787,33 @@ Need to change source buffer mode from sequence to segment to be able to start a
 https://blog.twitch.tv/live-video-transmuxing-transcoding-ffmpeg-vs-twitchtranscoder-part-i-489c1c125f28
 
 
+## js JS players
+
+mp4: https://github.com/mbebenita/Broadway
+ (needs to ingest whole film first)
+ 
+
+## ChihChengYang and jsmpegs https2ws
+
+stream h264
+this did not work (segfault)
+ffmpeg -y -s 800x600 -f video4linux2 -i /dev/video0 -c:v libx264 -tune zerolatency -an http://localhost:8081/supersecret
+
+note this criticism of c920's h264 here:https://unix.stackexchange.com/questions/163977/ffserver-streaming-h-264-from-logitech-c920
+
+v4l2-ctl --set-fmt-video=width=800,height=600,pixelformat=H264
+
+still segfaults even after setting format (just manages a few frames)
+
+this seems to stream:-
+sudo docker run --network="host" --device=/dev/video0 jrottenberg/ffmpeg -f v4l2 -framerate 25 -video_size 640x480 -i /dev/video0 -codec:v libx264 -f h264 http://localhost:8081/supersecret
+
+
 #Useful stuff
+
+Mime type support checking on browser
+https://cconcolato.github.io/media-mime-support/
+
 
 grep -rnw './' -e 'Decode'
 
