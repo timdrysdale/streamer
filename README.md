@@ -2,10 +2,7 @@
 
 Websocket relay that can bridge between two servers or two clients that send binary data.
 
-## Status
-
-Alpha; no automated testing; do not use
-
+![alt text][status]
 
 ## Usage
 
@@ -37,3 +34,4 @@ You want to forward data from one websocket client to another, so you want two l
 ```$ ./streamer -t ws://localhost:8003/ -r ws://localhost:8004/ --servers```
 
 
+[status]: https://img.shields.io/badge/alpha-do%20not%20use-orange "Alpha status, do not use"

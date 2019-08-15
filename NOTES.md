@@ -743,6 +743,11 @@ so this then works:
 $ ffmpeg -f v4l2 -framerate 25 -video_size 640x480 -i /dev/v4l/by-id/usb-046d_HD_Pro_Webcam_C920_42B15FEF-video-index0  -f mpegts -codec:v mpeg1video -s 640x480 -b:v 1000k -bf 0 http://localhost:8081/supersecret
 ```
 
+bump up the volume, go mono
+ffmpeg -f alsa -ar 44200 -i hw:0 -f mpegts -codec:a mp2 -b:a 128k -muxdelay 0.001 -ac 1 -filter:a "volume=50" http://localhost:8081/supersecret
+
+
+
 ## Drone stack webrtc
 https://webrtchacks.com/what-i-learned-about-h-264-for-webrtc-video-tim-panton/
 
@@ -807,6 +812,62 @@ still segfaults even after setting format (just manages a few frames)
 
 this seems to stream:-
 sudo docker run --network="host" --device=/dev/video0 jrottenberg/ffmpeg -f v4l2 -framerate 25 -video_size 640x480 -i /dev/video0 -codec:v libx264 -f h264 http://localhost:8081/supersecret
+
+
+## frame rates
+
+you can't squeeze down the output frame rate, but you can go to 5x encoding speed by reducing the input frame rate to 1frame per second, then producing 20fps output
+
+jsmpeg]$ sudo docker run --device=/dev/video0 --network="host" jrottenberg/ffmpeg -f v4l2 -r 1 -video_size 640x480 -i /dev/video0  -f mpegts -codec:v mpeg1video -s 1024x768 -b:v 1000k -r 20 -bf 0 http://127.0.0.1:8081/supersecret 
+
+This drops the bitrate to 240kbits/s; we still get some artefacts but it degrades nicer than the higher bitrate streams because more of the image is understandable
+
+1024by768
+
+1 in, 20 out produces 5fps and 250kbps bitrate
+2 in, 20 out produces 5fps and 428 bitrate
+3 in, 20 out produces 5fps and 555kps bitrate
+1 in 30 out produces 5fps and 236kbps  4.9x speed up 23% CPU
+25 in, 25out produces 24 fps 1150kbps and 67%
+no rate spec, 30 fps, 1230kpbpsa, 80% CPU
+r20 in, no out, 20fps, 1120kbps, 55% CPU
+
+320 by 240 
+r20 in 20fps 718bps, cpu 18%
+
+640 by 480
+r20 in 20fps 1120 bps, cpu 25%
+r30 in 29fps 1150bps, cpu 33%
+
+so....
+1024-768-24fps is same bitrate as 640-480-20fps?
+But CPU is 2.5x higher
+
+The extra frame rate impacts CPU proportionally (assume 8% overhead, 8% per 10fps, so 24% for 20fps and 32% for 30fps) but bitstream stays similar - same amount of change needs to be sent, whether it happens more or less often is not so relevant?
+
+c5.large
+streamer at 0.7% CPU and 0.3% memory
+nginx    at 0.3% CPU and 0.3% memory
+
+so .... could do 100 experiments on one C5 at max.
+Assume derating factor of 40% utilisation for redundancy with overhead to carry whole load on one server if one fails....
+Assume derating factor of 6 for 3 multirate bitstreams for each experiment coming in, and 3 users for experiment going out
+So 100 experiments * 0.4 / 6 = 6 experiments for an hour for $0.101
+c5.large pricing is $0.101/hour
+So we are looking at <=$0.02/hour for a 3-user multirate streamed experiment?
+or .... 0.25c for single user experiment for an hour ....
+
+A c5 metal ... 48x bigger, 48x price. so no saving in scaling, but no penalty either. So redundancy by having multiple servers seems possible ...
+
+if used routings/paths, could simply reroute streams on death of a relay.
+
+
+
+
+
+
+
+
 
 
 #Useful stuff
